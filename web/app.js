@@ -4,7 +4,8 @@ const safeLink=url=>/^https?:\/\//.test(url||'')?url:'';
 let tab='nearby',explorerTab='nearby',visible=[],map=null,markers=null,circles=null,tiles=null,compareRows=[],schoolMarkers=new Map(),mapTimer=null;
 let relationLayer=null,relationRenderer=null,relationLines=new Map(),selectedSchoolId=null,highlightedSchoolId=null,schoolCards=new Map(),mapRenderKey=null;
 let manualMode=false,manualSchoolId=null,manualLine=null;
-let reverseMode=false,reverseSchool=null,reverseSite=null;
+let reverseMode=false,reverseSchool=null,reverseSite=null,reverseFilterKey=null;
+const reverseKey=f=>JSON.stringify([tab,f.campus,f.stage,f.district,f.nature,f.kind,f.quality,f.search]);
 const schoolById=new Map([...DATA.schools,...(window.PRIORITY_SCHOOLS||[])].map(s=>[s.id,s]));
 const campusById=new Map(DATA.campuses.map(c=>[c.id,c]));
 function currentFilters(){return {campus:$('campus').value,radius:Number($('radius').value)*1000,stage:$('stage').value,district:$('district').value,nature:$('nature').value,kind:$('kind').value,quality:$('quality').value,search:$('search').value.trim().toLowerCase(),sort:$('sort').value}}
@@ -12,8 +13,8 @@ function nearest(s,campus){const entries=campus==='all'?Object.entries(s.distanc
 function matches(s,f){return (f.stage==='all'||s.stage===f.stage||(s.priorityStage&&s.priorityStage.includes('初高中')&&f.stage==='初中'))&&(f.district==='all'||s.district===f.district)&&(f.nature==='all'||s.nature===f.nature)&&(f.kind==='all'||(f.kind==='市实验'?s.type.startsWith(f.kind):s.type.includes(f.kind)))&&(f.quality==='all'||(f.quality==='located'?s.sites.length>0:!s.sites.length))&&(!f.search||[s.name,s.priority,...(s.aliases||[]),s.code,s.officialAddress?.address||'',...s.sites.map(x=>x.address||x.legacyAddress||'')].join(' ').toLowerCase().includes(f.search))}
 function getViews(f=currentFilters(),mode=tab){const arr=(mode==='priority'?window.PRIORITY_SCHOOLS:DATA.schools).filter(s=>matches(s,f)).map(s=>({...s,nearest:nearest(s,f.campus)})).filter(s=>(mode!=='nearby'&&!(mode==='priority'&&f.campus!=='all'))||(s.nearest&&s.nearest.meters<=f.radius));arr.sort((a,b)=>f.sort==='name'?a.name.localeCompare(b.name,'zh-CN'):f.sort==='district'?a.district.localeCompare(b.district,'zh-CN')||a.name.localeCompare(b.name,'zh-CN'):(a.nearest?.meters??Infinity)-(b.nearest?.meters??Infinity)||a.name.localeCompare(b.name,'zh-CN'));return arr}
 function formatDistance(m){return m==null?'待定位':m<1000?Math.round(m/10)*10+' m':(m/1000).toFixed(2)+' km'}
-function setTab(name,keepFilters=false){if(name==='priority'&&!keepFilters){for(const id of ['campus','district','nature','kind','quality','stage'])$(id).value='all';$('search').value='';$('showRelations').checked=false}tab=name;if(['nearby','registry','priority'].includes(name))explorerTab=name;document.querySelectorAll('[data-tab]').forEach(b=>{b.classList.toggle('active',b.dataset.tab===name);b.setAttribute('aria-current',b.dataset.tab===name?'page':'false')});$('explorer').classList.toggle('hidden',!['nearby','registry','priority'].includes(name));$('comparePanel').classList.toggle('hidden',name!=='compare');$('sourcesPanel').classList.toggle('hidden',name!=='sources');$('insightsPanel').classList.toggle('hidden',name!=='insights');$('studentsPanel').classList.toggle('hidden',name!=='students');render();if(map)requestAnimationFrame(()=>map.invalidateSize())}
-function render(){const f=currentFilters(),campus=DATA.campuses.find(c=>c.id===f.campus);visible=getViews(f,['nearby','registry','priority'].includes(tab)?tab:explorerTab);$('radiusValue').textContent=f.radius/1000+' km';document.querySelectorAll('[data-radius]').forEach(b=>b.classList.toggle('chosen',Number(b.dataset.radius)===f.radius/1000));$('shareFilters').disabled=tab==='priority';$('shareFilters').title=tab==='priority'?'P级名录仅供本机查看，暂不支持分享':'';$('headline').textContent=campus?campus.name+'周边':'27 个校区，连接上海学校';$('subtitle').textContent=tab==='priority'?(campus?'P级学校 · 当前校区 '+f.radius/1000+' km 直线范围':'P级原始名录 · 不受半径限制 · 校址均为参考'):tab==='registry'?'全量名录保留待定位学校；距离以当前所选校区计算。':`参考直线半径 ${f.radius/1000} km · ${f.stage==='all'?'高中与初中':f.stage} · 不等于步行距离`;
+function setTab(name,keepFilters=false){if(name!==tab&&reverseMode)resetReverseState();if(name==='priority'&&!keepFilters&&tab!=='priority'){$('stage').value='all';$('showRelations').checked=false}tab=name;if(['nearby','registry','priority'].includes(name))explorerTab=name;document.querySelectorAll('[data-tab]').forEach(b=>{b.classList.toggle('active',b.dataset.tab===name);b.setAttribute('aria-current',b.dataset.tab===name?'page':'false')});$('explorer').classList.toggle('hidden',!['nearby','registry','priority'].includes(name));$('comparePanel').classList.toggle('hidden',name!=='compare');$('sourcesPanel').classList.toggle('hidden',name!=='sources');$('insightsPanel').classList.toggle('hidden',name!=='insights');$('studentsPanel').classList.toggle('hidden',name!=='students');render();if(map)requestAnimationFrame(()=>map.invalidateSize())}
+function render(){const f=currentFilters(),campus=DATA.campuses.find(c=>c.id===f.campus);if(reverseSchool&&reverseFilterKey!==reverseKey(f))resetReverseState();visible=getViews(f,['nearby','registry','priority'].includes(tab)?tab:explorerTab);$('radiusValue').textContent=f.radius/1000+' km';document.querySelectorAll('[data-radius]').forEach(b=>b.classList.toggle('chosen',Number(b.dataset.radius)===f.radius/1000));$('shareFilters').disabled=false;$('shareFilters').title='';$('headline').textContent=campus?campus.name+'周边':'27 个校区，连接上海学校';$('subtitle').textContent=tab==='priority'?(campus?'P级学校 · 当前校区 '+f.radius/1000+' km 直线范围':'P级原始名录 · 不受半径限制 · 校址均为参考'):tab==='registry'?'全量名录保留待定位学校；距离以当前所选校区计算。':`参考直线半径 ${f.radius/1000} km · ${f.stage==='all'?'高中与初中':f.stage} · 不等于步行距离`;
 $('campusInfo').innerHTML=campus?'<b>'+esc(campus.district)+'</b>'+esc(campus.address)+'<br><small>地址与坐标沿用旧版 · '+DATA.meta.campusDate+'</small>':'<b>全部 27 个教学点</b>每所学校取距任一校区的最近校址；多校区覆盖去重统计。';$('totalHigh').textContent=DATA.meta.seniorCount;$('locatedHigh').textContent=DATA.meta.seniorLocated;$('missingHigh').textContent=DATA.meta.seniorUnlocated;$('resultCount').textContent=visible.length;$('resultLabel').textContent=explorerTab==='nearby'?'当前范围学校':'当前条件学校';$('resultMeta').textContent=`高中 ${visible.filter(s=>s.stage==='高中').length} / 初中 ${visible.filter(s=>s.stage==='初中').length}`;
 const missing=(tab==='priority'?window.PRIORITY_SCHOOLS:DATA.schools).filter(s=>matches(s,{...f,quality:'all'})&&!s.sites.length).length;
 $('notice').textContent=tab==='priority'?(campus?`${campus.name} · ${f.radius/1000} km 内有 ${visible.length} 条P级学校参考记录；另有 ${missing} 条待定位，不能判断距离。距离为直线参考。`:`P级原始名录 ${visible.length} 条，其中 ${visible.filter(s=>s.sites.length).length} 条有参考坐标，${missing} 条待定位；待定位学校仅显示在清单中，不能推测落点。部分学校有多个校址，地图暂显示距所选校区最近的一个。`):tab==='nearby'?`当前结果仅为有参考校址的学校。另有 ${missing} 所符合其他条件的学校待定位，无法判断是否在 ${f.radius/1000} km 内；半径边缘 ±200 m 请复核。`:tab==='registry'?'全量名录不受半径限制。招生归属不一定是校址所在区；市属学校统一保留“上海市”。':DATA.meta.locationNotice;
@@ -22,10 +23,11 @@ function renderList(f){
   $('schoolList').innerHTML=visible.length?visible.map(s=>{const n=s.nearest,border=n&&Math.abs(n.meters-f.radius)<=200&&tab==='nearby';return `<article class="school-card" data-card="${esc(s.id)}"><button class="school-open" data-school="${esc(s.id)}"><div class="school-title"><h3>${esc(s.name)}</h3><span class="distance">${n?'<small>约 </small>':''}${formatDistance(n?.meters)}</span></div><div class="badges"><span class="badge">${esc(s.priorityStage||s.stage)}</span>${s.priority?'<span class="badge">'+esc(s.priority)+'</span>':''}<span class="badge ${s.nature==='民办'?'private':''}">${esc(s.nature)}</span><span class="badge ${!n?'missing':''}">${esc(n?s.type:'待定位')}</span>${border?'<span class="badge missing">范围边缘</span>':''}</div><p>${esc(n?.site.address||n?.site.legacyAddress||s.officialAddress?.address||(n?'地图未提供完整门牌地址':'保留在名录中，不判为范围外'))}</p><div class="school-meta">${esc(s.district)}${s.code?' · '+esc(s.code):''}${n?' · '+esc(n.campus.name):''}</div></button>${window.atlasStudents?.schoolBadge(s.id,f.campus)||''}<div class="school-actions">${n?`<button data-locate="${esc(s.id)}">地图定位 ↗</button>`:''}${s.sites.length?`<button data-reverse="${esc(s.id)}">附近校区 ↗</button>`:''}<button data-school="${esc(s.id)}">查看画像 →</button></div></article>`}).join(''):'<div class="empty"><b>当前条件没有可列出的学校</b>可扩大半径、调整筛选，或在全量名录查看待定位学校。这里的零不代表现实中没有学校。</div>';
   document.querySelectorAll('[data-school]').forEach(b=>b.addEventListener('click',()=>openSchool(b.dataset.school)));
   document.querySelectorAll('[data-locate]').forEach(b=>b.addEventListener('click',()=>locateSchool(b.dataset.locate)));
-  document.querySelectorAll('[data-reverse]').forEach(b=>b.addEventListener('click',()=>selectReverseSchool(b.dataset.reverse)));
+  document.querySelectorAll('[data-reverse]').forEach(b=>b.addEventListener('click',()=>{selectReverseSchool(b.dataset.reverse);if(!document.body.classList.contains('map-expanded'))$('map').scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'center'});}));
   schoolCards.clear();document.querySelectorAll('[data-card]').forEach(card=>{schoolCards.set(card.dataset.card,card);card.addEventListener('mouseenter',()=>highlightSchool(card.dataset.card));card.addEventListener('mouseleave',()=>highlightSchool(selectedSchoolId));card.addEventListener('focusin',()=>highlightSchool(card.dataset.card));card.addEventListener('focusout',event=>{if(!card.contains(event.relatedTarget))highlightSchool(selectedSchoolId)});});
 }
 function locateSchool(id){
+  if(reverseMode){resetReverseState();renderMap();}
   const marker=schoolMarkers.get(id);if(!marker||!map)return;
   highlightSchool(id,true);
   const school=visible.find(s=>s.id===id),campus=school?.nearest?.campus;
@@ -84,16 +86,17 @@ function manualSelectCampus(campus){
 }
 $('manualConnect').addEventListener('click',()=>setManualMode(!manualMode));
 $('clearManual').addEventListener('click',()=>clearManualConnection(manualMode?'已清除；请重新点击学校圆点。':undefined));
-function stopReverse(){
-  reverseMode=false;reverseSchool=null;reverseSite=null;document.body.classList.remove('reverse-mode');
+function resetReverseState(){
+  reverseMode=false;reverseSchool=null;reverseSite=null;reverseFilterKey=null;document.body.classList.remove('reverse-mode');
   $('reverseMode').setAttribute('aria-pressed','false');$('reverseMode').textContent='⌖ 以学校找校区';
   $('reverseExit').classList.add('hidden');$('reverseStatus').textContent='先选择学校，查看周边校区。';$('reverseResults').innerHTML='';
-  mapRenderKey=null;render();
+  mapRenderKey=null;
 }
+function stopReverse(){resetReverseState();render();}
 function selectReverseSchool(id){
   const school=visible.find(s=>s.id===id);if(!school||!school.sites.length)return;
   if(manualMode)setManualMode(false);
-  reverseSchool=school;reverseSite=school.nearest?.site||school.sites[0];reverseMode=true;
+  reverseSchool=school;reverseSite=school.nearest?.site||school.sites[0];reverseMode=true;reverseFilterKey=reverseKey(currentFilters());
   document.body.classList.add('reverse-mode');$('reverseMode').setAttribute('aria-pressed','true');$('reverseMode').textContent='重新选学校';$('reverseExit').classList.remove('hidden');
   renderReverse();
 }
@@ -160,7 +163,7 @@ function renderMap(){
   const campuses=manualMode||f.campus==='all'?DATA.campuses:DATA.campuses.filter(c=>c.id===f.campus);
   for(const c of campuses){
     const campusMarker=L.marker([c.lat,c.lon],{title:c.name,alt:c.name,icon:L.divIcon({className:'',html:'<div class="campus-dot '+(f.campus!=='all'?'active':'')+'"></div>',iconSize:[23,23],iconAnchor:[11,11]})}).bindTooltip(c.name).addTo(markers);
-    campusMarker.on('click',()=>{if(manualMode){manualSelectCampus(c);return} $('campus').value=c.id;for(const id of ['district','nature','kind','quality','stage'])$(id).value='all';$('search').value='';setTab(explorerTab==='priority'?'priority':'nearby',true)});
+    campusMarker.on('click',()=>{if(manualMode){manualSelectCampus(c);return} $('campus').value=c.id;setTab(explorerTab==='priority'?'priority':'nearby',true)});
     if(explorerTab==='nearby'||(explorerTab==='priority'&&f.campus!=='all'))L.circle([c.lat,c.lon],{radius:f.radius,color:'#346b51',weight:1,fillOpacity:.035}).addTo(circles);
   }
   for(const school of visible){

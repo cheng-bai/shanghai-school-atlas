@@ -3,7 +3,7 @@
   const atlas = window.atlas;
   const fieldIds = ['campus', 'radius', 'stage', 'district', 'nature', 'kind', 'quality', 'sort', 'search'];
   const toggles = ['showRelations', 'showRadius'];
-  const views = ['nearby', 'registry', 'compare', 'sources', 'insights', 'students'];
+  const views = ['nearby', 'registry', 'priority', 'compare', 'sources', 'insights', 'students'];
   const element = id => document.getElementById(id);
 
   function shareURL() {
@@ -42,9 +42,9 @@
     }
     // Preserve the list context when sharing a comparison or sources view.
     const explorer = params.get('explorer');
-    if (explorer === 'nearby' || explorer === 'registry') atlas.setTab(explorer);
+    if (['nearby', 'registry', 'priority'].includes(explorer)) atlas.setTab(explorer, true);
     const view = params.get('view');
-    atlas.setTab(views.includes(view) ? view : 'nearby');
+    atlas.setTab(views.includes(view) ? view : 'nearby', true);
   }
 
   element('shareFilters').addEventListener('click', async () => {
