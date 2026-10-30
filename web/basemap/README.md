@@ -4,6 +4,7 @@
 
 - 原始数据：© OpenStreetMap contributors，由 Geofabrik 提供上海 shapefile 提取。
 - 下载来源：https://download.geofabrik.de/asia/china/shanghai-latest-free.shp.zip
+- 本次对应的固定日期包：https://download.geofabrik.de/asia/china/shanghai-261029-free.shp.zip （与下载包 MD5 核对一致：`2fda307e448a0073531654857192b534`）。
 - 来源说明页：https://download.geofabrik.de/asia/china/shanghai.html
 - 原始数据截至：2026-10-29T21:21:26Z；本次下载/生成：2026-10-30。
 - 授名与版权：https://www.openstreetmap.org/copyright
