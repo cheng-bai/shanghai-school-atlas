@@ -3,10 +3,27 @@ const fs=require('node:fs'), vm=require('node:vm'), assert=require('node:assert/
 const root=path.resolve(__dirname,'..');
 const context={window:{}, Math, Promise, console};
 vm.createContext(context);
-vm.runInContext(fs.readFileSync(path.join(root,'web/basemap/shanghai.js'),'utf8'),context);
+vm.runInContext(fs.readFileSync(path.join(root,'web/basemap/manifest.js'),'utf8'),context);
+const data=context.window.SHANGHAI_BASEMAP;
+for(const part of data.parts){
+  vm.runInContext(fs.readFileSync(path.join(root,'web/basemap',part.file),'utf8'),context);
+  const features=context.window.ATLAS_BASEMAP_PARTS[part.zoom];
+  assert.equal(features.length,part.features);
+  for(const feature of features){assert.equal(Math.max(10,feature[1]),part.zoom);data.features.push(feature);}
+}
+data.features.sort((a,b)=>a[8]-b[8]);
+data.features.forEach((f,i)=>assert.equal(f[8],i));
+const compare=process.argv.find(arg=>arg.startsWith('--compare='));
+if(compare){
+  const text=require('node:child_process').execFileSync('git',['show',compare.slice(10)+':web/basemap/shanghai.js'],{cwd:root,maxBuffer:20*1024*1024,encoding:'utf8'});
+  const old=JSON.parse(text.slice('window.SHANGHAI_BASEMAP='.length,-2));
+  assert.equal(JSON.stringify(data.features.map(f=>f.slice(0,8))),JSON.stringify(old.features));
+  assert.equal(JSON.stringify(data.names),JSON.stringify(old.names));
+  assert.equal(JSON.stringify(data.meta),JSON.stringify(old.meta));
+  console.log('Lossless package comparison: all geometry, names, order and metadata match '+compare.slice(10));
+}
 // Expose the decoder only in this test harness; the published API stays small.
 vm.runInContext(fs.readFileSync(path.join(root,'web/local-map.js'),'utf8').replace('return {load, create};','return {load, create, decode};'),context);
-const data=context.window.SHANGHAI_BASEMAP;
 assert.equal(data.meta.coordinates,'WGS84');assert.equal(data.meta.license,'ODbL-1.0');
 let points=0,rings=0;
 for(const f of data.features){

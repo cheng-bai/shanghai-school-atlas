@@ -199,12 +199,12 @@ async function changeBase(){
   if(choice==='offline'){$('mapStatus').textContent='点位模式：不含道路；校区和学校位置仍可查看。';return}
   if(choice==='local'){
     const token={};mapBaseToken=token;
-    $('mapStatus').textContent='正在加载网站自带的上海底图（首次约 10.6 MB），学校点位可先使用…';
+    $('mapStatus').textContent='正在加载上海概览底图，学校点位可先使用…';
     try{
       const data=await AtlasLocalMap.load();
       if(mapBaseToken!==token||$('baseMap').value!=='local')return;
-      tiles=AtlasLocalMap.create(data);tiles.addTo(map);
-      $('mapStatus').textContent='自带参考底图 · 道路/水系/地名 · 数据截至 2026-10-29 · 非导航地图，不需外部瓦片服务。';
+      const layer=AtlasLocalMap.create(data, message=>{if(tiles===layer)$('mapStatus').textContent=message});
+      tiles=layer;layer.addTo(map);
     }catch(error){
       if(mapBaseToken===token)$('mapStatus').textContent='自带底图文件未能加载，请点击重新加载；学校点位仍可使用。';
     }

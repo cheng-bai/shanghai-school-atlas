@@ -1,20 +1,38 @@
 'use strict';
 // A single canvas renders the reference geometry, not 150,000 Leaflet layers.
 window.AtlasLocalMap = (() => {
-  let pending;
-  function load() {
-    if (window.SHANGHAI_BASEMAP) return Promise.resolve(window.SHANGHAI_BASEMAP);
-    if (!pending) pending = new Promise((resolve, reject) => {
+  const pending = new Map();
+  function loadScript(file, read) {
+    const existing = read();
+    if (existing) return Promise.resolve(existing);
+    if (!pending.has(file)) {
+      const promise = new Promise((resolve, reject) => {
       const script = document.createElement('script');
-      script.src = 'basemap/shanghai.js?v=1';
+      script.src = 'basemap/' + file;
       script.onload = () => {
-        if (window.SHANGHAI_BASEMAP) resolve(window.SHANGHAI_BASEMAP);
-        else { script.remove(); pending = null; reject(new Error('Invalid basemap')); }
+        const result = read();
+        if (result) resolve(result);
+        else { script.remove(); reject(new Error('Invalid basemap part')); }
       };
-      script.onerror = () => { script.remove(); pending = null; reject(new Error('Basemap download failed')); };
+      script.onerror = () => { script.remove(); reject(new Error('Basemap download failed')); };
       document.head.append(script);
-    });
-    return pending;
+      }).finally(() => pending.delete(file));
+      pending.set(file, promise);
+    }
+    return pending.get(file);
+  }
+  async function addPart(data, part) {
+    const features = await loadScript(part.file, () => window.ATLAS_BASEMAP_PARTS?.[part.zoom]);
+    if (!data.loadedParts.has(part.zoom)) {
+      for (const feature of features) data.features.push(feature);
+      data.loadedParts.add(part.zoom);
+    }
+  }
+  async function load() {
+    const data = await loadScript('manifest.js?v=2', () => window.SHANGHAI_BASEMAP);
+    data.loadedParts ||= new Set();
+    await addPart(data, data.parts.find(part => part.zoom === 10));
+    return data;
   }
   function decode(feature) {
     if (feature.world) return feature.world;
@@ -37,17 +55,32 @@ window.AtlasLocalMap = (() => {
     feature.world = points;
     return points;
   }
-  function create(data) {
+  function create(data, onStatus = () => {}) {
     const styles = [
       {color:'#ddd9cd', width:1.4}, {color:'#c5c5b9', width:1.8},
       {color:'#dbbd87', width:2.3}, {color:'#d4a66a', width:3},
       {color:'#c8e0e3', width:0}, {color:'#b0cfd6', width:1.5}
     ];
-    const groups = Array.from({length:7}, () => []);
-    data.features.forEach(f => groups[f[0]].push(f));
+    let groups;
+    const zoomGroups = new Map();
+    function regroup() {
+      groups = Array.from({length:7}, () => []);
+      data.features.forEach(f => groups[f[0]].push(f));
+      groups.forEach(group => group.sort((a,b) => a[8]-b[8]));
+      zoomGroups.clear();
+    }
+    function groupsAt(zoom) {
+      const key = Math.floor(zoom);
+      if (!zoomGroups.has(key)) zoomGroups.set(key, groups.map(group => group.filter(f => f[1] <= key)));
+      return zoomGroups.get(key);
+    }
+    regroup();
     return new (L.Layer.extend({
       onAdd(map) {
         this._map = map;
+        this.active = true;
+        this.requests = new Set();
+        this.failed = new Set();
         this.canvas = L.DomUtil.create('canvas', 'atlas-local-basemap');
         this.canvas.style.pointerEvents = 'none';
         map.getPane('tilePane').append(this.canvas);
@@ -56,6 +89,7 @@ window.AtlasLocalMap = (() => {
         this.draw();
       },
       onRemove(map) {
+        this.active = false;
         map.off('moveend zoomend resize', this.schedule, this);
         cancelAnimationFrame(this.frame);
         this.canvas.remove();
@@ -65,19 +99,42 @@ window.AtlasLocalMap = (() => {
         cancelAnimationFrame(this.frame);
         this.frame = requestAnimationFrame(() => this.draw());
       },
+      ensureDetails(zoom) {
+        const required = data.parts.filter(part => part.zoom <= Math.max(10, Math.floor(zoom)));
+        const missing = required.filter(part => !data.loadedParts.has(part.zoom));
+        const hasFailure = missing.some(part => this.failed.has(part.zoom));
+        const status = hasFailure ? '自带底图已显示，但部分道路细节未能加载；点击重新加载重试。' : missing.length ? '自带底图已显示，正在加载当前缩放的道路细节…' : '自带参考底图 · 道路/水系/地名 · 数据截至 2026-10-29 · 非导航地图，不需外部瓦片服务。';
+        if (status !== this.status) { this.status = status; onStatus(status); }
+        for (const part of missing) {
+          if (this.requests.has(part.zoom) || this.failed.has(part.zoom)) continue;
+          this.requests.add(part.zoom);
+          addPart(data, part).then(() => {
+            if (this.active) { regroup(); this.schedule(); }
+          }).catch(() => {
+            if (this.active) { this.failed.add(part.zoom); this.schedule(); }
+          }).finally(() => this.requests.delete(part.zoom));
+        }
+        return missing.length === 0;
+      },
       draw() {
         const map = this._map, zoom = map.getZoom(), size = map.getSize();
+        const detailReady = this.ensureDetails(zoom);
+        const visibleGroups = groupsAt(zoom);
         const pad = 100, width = size.x + 2 * pad, height = size.y + 2 * pad;
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
         const canvas = this.canvas, ctx = canvas.getContext('2d');
-        canvas.width = width * dpr; canvas.height = height * dpr;
+        const pixelWidth = Math.floor(width * dpr), pixelHeight = Math.floor(height * dpr);
+        if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+          canvas.width = pixelWidth; canvas.height = pixelHeight;
+        }
         canvas.style.width = width+'px'; canvas.style.height = height+'px';
         L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([-pad, -pad]));
-        ctx.scale(dpr, dpr); ctx.fillStyle = '#f2f1e9'; ctx.fillRect(0, 0, width, height);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = '#f2f1e9'; ctx.fillRect(0, 0, width, height);
         const bounds = map.getBounds().pad(.3), scale = 256 * Math.pow(2, zoom);
+        const west=bounds.getWest(), east=bounds.getEast(), south=bounds.getSouth(), north=bounds.getNorth();
         const origin = map.project(map.getCenter(), zoom).subtract(size.divideBy(2)).subtract([pad, pad]);
         const labels = [], occupied = [];
-        const inView = f => f[1] <= zoom && f[5] >= bounds.getWest() && f[3] <= bounds.getEast() && f[6] >= bounds.getSouth() && f[4] <= bounds.getNorth();
+        const inView = f => f[5] >= west && f[3] <= east && f[6] >= south && f[4] <= north;
         const pixel = p => [p[0]*scale-origin.x, p[1]*scale-origin.y];
         const label = (text, x, y, large=false) => {
           if (!text || x < pad || y < pad || x > width-pad || y > height-pad) return;
@@ -93,30 +150,36 @@ window.AtlasLocalMap = (() => {
           const style = styles[kind];
           ctx.strokeStyle = style.color; ctx.fillStyle = style.color;
           ctx.lineWidth = style.width * (zoom >= 14 ? 1.2 : 1); ctx.lineJoin = 'round';
-          for (const f of groups[kind]) {
+          for (const f of visibleGroups[kind]) {
             if (!inView(f)) continue;
             const rings = kind === 4 ? decode(f) : [decode(f)];
+            const wantsLabel = kind !== 4 && zoom >= (kind === 0 ? 16 : 13) && f[2] >= 0;
+            let best = 0, position;
             ctx.beginPath();
             for (const ring of rings) {
-              ring.map(pixel).forEach(([x,y], i) => i ? ctx.lineTo(x,y) : ctx.moveTo(x,y));
+              let previousX, previousY;
+              for (const point of ring) {
+                const x = point[0]*scale-origin.x, y = point[1]*scale-origin.y;
+                if (previousX !== undefined) {
+                  ctx.lineTo(x,y);
+                  if (wantsLabel) {
+                    const length = (x-previousX)**2 + (y-previousY)**2;
+                    if (length > best) { best=length; position=[(x+previousX)/2,(y+previousY)/2]; }
+                  }
+                } else ctx.moveTo(x,y);
+                previousX = x; previousY = y;
+              }
               if (kind === 4) ctx.closePath();
             }
             if (kind === 4) ctx.fill('evenodd');
             else ctx.stroke();
-            const points = kind === 4 ? [] : decode(f).map(pixel);
-            if (zoom >= (kind === 0 ? 16 : 13) && f[2] >= 0 && points.length > 1) {
-              let best = 0, position;
-              for (let i=1; i<points.length; i++) {
-                const a=points[i-1], b=points[i], length=Math.hypot(a[0]-b[0],a[1]-b[1]);
-                if (length>best) { best=length; position=[(a[0]+b[0])/2,(a[1]+b[1])/2]; }
-              }
-              if (best>80) labels.push([data.names[f[2]], ...position]);
-            }
+            if (best>6400) labels.push([data.names[f[2]], ...position]);
           }
         }
-        for (const f of groups[6]) if (inView(f)) label(data.names[f[2]], ...pixel(decode(f)[0]), true);
+        for (const f of visibleGroups[6]) if (inView(f)) label(data.names[f[2]], ...pixel(decode(f)[0]), true);
         for (const item of labels.reverse()) label(...item);
         canvas.dataset.drawn = 'true';
+        canvas.dataset.zoomReady = String(detailReady);
       }
     }))();
   }

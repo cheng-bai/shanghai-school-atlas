@@ -6,12 +6,31 @@ The public OSM tile server is never queried. Coordinates remain WGS84.
 import collections
 import hashlib
 import json
-import math
 from pathlib import Path
 import sys
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+
+def package(data, output_dir=None):
+    """Split by the existing visibility zoom, without changing any geometry."""
+    directory = Path(output_dir) if output_dir else ROOT/'web/basemap'
+    directory.mkdir(parents=True, exist_ok=True)
+    parts = []
+    for zoom in (10, 11, 12, 13, 14):
+        features = [f+[i] for i, f in enumerate(data['features']) if max(10, f[1]) == zoom]
+        payload = json.dumps(features, ensure_ascii=False, separators=(',', ':'))
+        digest = hashlib.sha256(payload.encode()).hexdigest()[:12]
+        name = f'zoom{zoom}-{digest}.js'
+        contents = f'window.ATLAS_BASEMAP_PARTS=window.ATLAS_BASEMAP_PARTS||{{}};window.ATLAS_BASEMAP_PARTS[{zoom}]={payload};\n'
+        (directory/name).write_text(contents)
+        parts.append({'zoom': zoom, 'file': name, 'features': len(features), 'bytes': len(contents.encode())})
+    manifest = {key: data[key] for key in ('meta', 'names')}
+    manifest['parts'] = parts
+    manifest['features'] = []
+    text = 'window.SHANGHAI_BASEMAP='+json.dumps(manifest, ensure_ascii=False, separators=(',', ':'))+';\n'
+    (directory/'manifest.js').write_text(text)
+    print(json.dumps({'manifestBytes': len(text.encode()), 'parts': parts}, ensure_ascii=False))
 
 def simplify(points, tolerance=0.00004):
     if len(points) < 3:
@@ -101,9 +120,11 @@ def build(archive):
             'sourceReadme': z.read('README').decode(),
             'sourceSha256': hashlib.sha256(Path(archive).read_bytes()).hexdigest(),
             'layers': dict(counts), 'simplifyDegrees': 0.00004}
-    output = ROOT/'web/basemap/shanghai.js'
-    output.write_text('window.SHANGHAI_BASEMAP='+json.dumps({'meta': meta, 'names': names, 'features': features}, ensure_ascii=False, separators=(',', ':'))+';\n')
-    print(json.dumps({'output': str(output), 'bytes': output.stat().st_size, 'features': len(features), 'layers': dict(counts)}, ensure_ascii=False))
+    package({'meta': meta, 'names': names, 'features': features})
 
 if __name__ == '__main__':
-    build(sys.argv[1])
+    if sys.argv[1] == '--repack':
+        text = Path(sys.argv[2]).read_text()
+        package(json.loads(text.removeprefix('window.SHANGHAI_BASEMAP=').removesuffix(';\n')))
+    else:
+        build(sys.argv[1])
