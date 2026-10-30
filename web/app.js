@@ -3,6 +3,7 @@ const DATA=window.SCHOOL_DATA,$=id=>document.getElementById(id),esc=value=>Strin
 const safeLink=url=>/^https?:\/\//.test(url||'')?url:'';
 let tab='nearby',explorerTab='nearby',visible=[],map=null,markers=null,circles=null,tiles=null,compareRows=[],schoolMarkers=new Map(),mapTimer=null;
 let relationLayer=null,relationRenderer=null,relationLines=new Map(),selectedSchoolId=null,highlightedSchoolId=null,schoolCards=new Map(),mapRenderKey=null;
+let mapBaseToken=null;
 let manualMode=false,manualSchoolId=null,manualLine=null;
 let reverseMode=false,reverseSchool=null,reverseSite=null,reverseFilterKey=null;
 const reverseKey=f=>JSON.stringify([tab,f.campus,f.stage,f.district,f.nature,f.kind,f.quality,f.search]);
@@ -141,7 +142,7 @@ function initMap(){
   if(typeof L==='undefined'){$('mapStatus').textContent='本地地图组件缺失，学校清单仍可使用。';return}
   // A rectangular navigation envelope includes Chongming and Shanghai's coastal edges.
   const shanghaiBounds=L.latLngBounds([30.65,120.85],[31.90,122.15]);
-  map=L.map('map',{preferCanvas:true,zoomAnimation:false,fadeAnimation:false,maxBounds:shanghaiBounds,maxBoundsViscosity:1}).setView([31.22,121.47],11);
+  map=L.map('map',{preferCanvas:true,zoomAnimation:false,fadeAnimation:false,maxZoom:19,maxBounds:shanghaiBounds,maxBoundsViscosity:1}).setView([31.22,121.47],11);
   const constrainZoom=()=>map.setMinZoom(Math.min(19,Math.max(9,map.getBoundsZoom(shanghaiBounds,true))));
   map.on('resize',constrainZoom);constrainZoom();
   L.control.scale({imperial:false,maxWidth:120}).addTo(map);
@@ -188,13 +189,28 @@ function renderMap(){
   highlightSchool(selectedSchoolId);fitMap();
 }
 function fitMap(){if(!map)return;const f=currentFilters();if(f.campus!=='all'&&(tab==='nearby'||tab==='priority')){const c=DATA.campuses.find(c=>c.id===f.campus);map.fitBounds(L.latLng(c.lat,c.lon).toBounds(f.radius*2),{padding:[20,20],maxZoom:15})}else{const points=[...visible.filter(s=>s.nearest).map(s=>[s.nearest.site.lat,s.nearest.site.lon]),...DATA.campuses.filter(c=>f.campus==='all'||f.campus===c.id).map(c=>[c.lat,c.lon])];if(points.length)map.fitBounds(points,{padding:[25,25],maxZoom:13})}}
-function changeBase(){
+async function changeBase(){
   if(!map)return;
+  mapBaseToken=null;
   clearTimeout(mapTimer);
   if(tiles){map.removeLayer(tiles);tiles=null}
   const choice=$('baseMap').value;
+  $('highResolution').disabled=choice!=='osm';
   if(choice==='offline'){$('mapStatus').textContent='点位模式：不含道路；校区和学校位置仍可查看。';return}
-  if(location.protocol==='file:'){$('mapStatus').textContent='请通过启动新版.command打开本机网页后使用街道地图。';return}
+  if(choice==='local'){
+    const token={};mapBaseToken=token;
+    $('mapStatus').textContent='正在加载网站自带的上海底图（首次约 10.6 MB），学校点位可先使用…';
+    try{
+      const data=await AtlasLocalMap.load();
+      if(mapBaseToken!==token||$('baseMap').value!=='local')return;
+      tiles=AtlasLocalMap.create(data);tiles.addTo(map);
+      $('mapStatus').textContent='自带参考底图 · 道路/水系/地名 · 数据截至 2026-10-29 · 非导航地图，不需外部瓦片服务。';
+    }catch(error){
+      if(mapBaseToken===token)$('mapStatus').textContent='自带底图文件未能加载，请点击重新加载；学校点位仍可使用。';
+    }
+    return;
+  }
+  if(location.protocol==='file:'){$('baseMap').value='local';changeBase();return}
   const sources={
     osm:{url:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}
   };
@@ -202,8 +218,9 @@ function changeBase(){
   tiles=layer;let loaded=0,failed=0;
   $('mapStatus').textContent='正在加载地图；如果道路未出现，可重新加载或切换点位模式。';
   layer.on('tileload',()=>{if(tiles!==layer)return;loaded++;$('mapStatus').textContent=failed?'部分地图加载失败；可重新加载或切换底图。':$('highResolution').checked&&L.Browser.retina?'OpenStreetMap 高清模式；网慢可关闭“高分屏高清”。若道路未显示请切换点位模式。':'地图来自 OpenStreetMap；若道路未显示，请切换点位模式。'});
-  layer.on('tileerror',()=>{if(tiles!==layer)return;failed++;$('mapStatus').textContent='地图加载失败或不完整，请重新加载或切换底图；学校点位仍可查看。'});
-  mapTimer=setTimeout(()=>{if(tiles===layer&&!loaded)$('mapStatus').textContent='地图仍未加载，请检查网络、重新加载或切换底图；学校点位仍可查看。'},12000);
+  const fallback=()=>{if(tiles!==layer)return;$('baseMap').value='local';changeBase()};
+  layer.on('tileerror',()=>{if(tiles!==layer)return;failed++;if(failed>=3)fallback();else $('mapStatus').textContent='在线底图加载失败，正在尝试；可切回自带上海底图。'});
+  mapTimer=setTimeout(()=>{if(tiles===layer&&!loaded)fallback()},12000);
   layer.addTo(map);
 }
 function historicalProfile(id){

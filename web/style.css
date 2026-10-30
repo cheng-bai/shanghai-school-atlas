@@ -85,3 +85,4 @@ body.map-expanded{overflow:hidden}.map-expanded .map-panel{position:fixed;inset:
 .fullscreen-radius button{min-height:32px;padding:5px 11px;border:1px solid #bed5c7;border-radius:6px;background:white;color:var(--green-dark);font-weight:700}
 .fullscreen-radius button.chosen{background:var(--green);border-color:var(--green);color:white}
 @media(max-width:700px){.map-expanded .fullscreen-radius{padding:5px 9px;gap:5px}.fullscreen-radius button{flex:1;padding:5px 4px}.school-actions button{min-height:40px}}
+.atlas-local-basemap{position:absolute;max-width:none!important;max-height:none!important}
