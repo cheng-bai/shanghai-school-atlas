@@ -15,6 +15,11 @@
     const view = atlas.getView();
     url.searchParams.set('view', view.tab);
     url.searchParams.set('explorer', view.explorerTab);
+    const reverse = atlas.getReverse();
+    if (reverse.schoolId) {
+      url.searchParams.set('school', reverse.schoolId);
+      url.searchParams.set('site', reverse.siteId);
+    }
     return url.href;
   }
 
@@ -27,7 +32,7 @@
       if (id === 'radius') {
         const radius = Number(value);
         if (value.trim() && Number.isFinite(radius) && radius >= 1 && radius <= 20) {
-          input.value = String(Math.round(radius * 2) / 2);
+          input.value = String(Math.round(radius * 10) / 10);
         }
       } else if (id === 'search') {
         input.value = value;
@@ -45,6 +50,9 @@
     if (['nearby', 'registry', 'priority'].includes(explorer)) atlas.setTab(explorer, true);
     const view = params.get('view');
     atlas.setTab(views.includes(view) ? view : 'nearby', true);
+    if (['nearby', 'registry', 'priority'].includes(atlas.getView().tab) && params.has('school')) {
+      atlas.exploreSchool(params.get('school'), params.get('site'));
+    }
   }
 
   element('shareFilters').addEventListener('click', async () => {
